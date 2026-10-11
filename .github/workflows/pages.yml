@@ -1,0 +1,82 @@
+name: Unpack web build and deploy Pages
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Unpack packed archive if present
+        run: |
+          if [ -d _packed ]; then
+            echo "Unpacking _packed/*.b64 ..."
+            cat _packed/part-*.b64 | tr -d '\n\r ' | base64 -d > /tmp/dist.tar.gz
+            tar xzf /tmp/dist.tar.gz -C .
+            rm -rf _packed
+            rm -f test-tiny.png
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            if git diff --cached --quiet; then
+              echo "Nothing to commit"
+            else
+              git commit -m "Unpack web build from packed archive"
+              git push
+            fi
+          else
+            echo "No _packed/ directory; using tree as-is"
+          fi
+
+  deploy:
+    needs: unpack
+    runs-on: ubuntu-latest
+    # Continues even if Pages is not enabled on the repo yet
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Stage static site (exclude .github)
+        run: |
+          rm -rf _site
+          mkdir _site
+          shopt -s dotglob nullglob
+          for item in *; do
+            case "$item" in
+              .|..|.git|.github|_site|_packed) ;;
+              *) cp -a "$item" _site/ ;;
+            esac
+          done
+          # Do not deploy the auto-init README as the game entry; index.html is the game
+          ls -la _site | head -40
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
